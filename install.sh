@@ -125,7 +125,9 @@ apt-get upgrade -y -q
 
 apt-get install -y \
   xserver-xorg xserver-xorg-video-fbdev xinit \
-  python3 python3-tk python3-requests \
+  x11-xserver-utils \
+  python3 python3-tk python3-requests python3-pil.imagetk \
+  fonts-freefont-ttf fontconfig \
   git wget unzip \
   xinput-calibrator xserver-xorg-input-evdev
 
@@ -200,7 +202,9 @@ cat > /usr/share/X11/xorg.conf.d/99-fbdev.conf <<'EOF'
 Section "Device"
     Identifier  "SPI LCD"
     Driver      "fbdev"
-    Option      "fbdev" "/dev/fb0"
+    # Pi 2B/Zero: HDMI takes fb0, SPI LCD gets fb1.
+    # If your display is blank, try changing fb1 to fb0.
+    Option      "fbdev" "/dev/fb1"
 EndSection
 EOF
 
