@@ -65,7 +65,7 @@ THEMES = {
     },
     "dark_green": {
         "bg":        "#001a00",
-        "time":      "#ffffff",
+        "time":      "#f9f9f9",
         "date":      "#aaffaa",
         "city":      "#88dd88",
         "ip":        "#446644",
@@ -103,7 +103,7 @@ THEMES = {
         "icon_badge": False,
     },
     "yellow": {
-        "bg":        "#1a1a00",
+        "bg":        "#1f1f00",
         "time":      "#ffffff",
         "date":      "#ffffaa",
         "city":      "#dddd77",
@@ -241,7 +241,7 @@ class WeatherFetcher:
         self._last_fetch:  float = 0.0
         self._last_geo:    float = 0.0
         self.fetch_interval: int = 600
-        self.geo_interval:   int = 3600   # re-check geo once per hour
+        self.geo_interval:   int = 3600   # re-check geo once per hour, calculated in seconds(1hr = 3600s).
 
     def get(self) -> dict:
         now = time.time()
@@ -448,17 +448,17 @@ class ClockApp:
 
         self.lbl_date = tk.Label(
             left, text="", bg=T["bg"], fg=T["date"],
-            font=("DejaVu Sans", 13))
+            font=("DejaVu Sans", 14))
         self.lbl_date.place(relx=0.5, rely=0.52, anchor="center")
 
         self.lbl_city = tk.Label(
             left, text="", bg=T["bg"], fg=T["city"],
-            font=("DejaVu Sans", 11))
+            font=("DejaVu Sans", 14))
         self.lbl_city.place(relx=0.5, rely=0.70, anchor="center")
 
         self.lbl_ip = tk.Label(
             left, text=self._local_ip, bg=T["bg"], fg=T["ip"],
-            font=("DejaVu Sans", 10))
+            font=("DejaVu Sans", 12))
         self.lbl_ip.place(relx=0.5, rely=0.84, anchor="center")
 
         # ── divider ──────────────────────────────────────────────────────────
