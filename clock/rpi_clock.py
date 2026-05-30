@@ -3,7 +3,8 @@
 rpi_clock.py  —  Waveshare 3.5" LCD (A) clock + weather display
 Standalone replacement for the archived texadactyl/rpi_clock project.
 
-Dependencies: tkinter (stdlib), requests (python3-requests), Pillow (python3-pil.imagetk)
+Dependencies: tkinter (stdlib), requests (python3-requests),
+              Pillow (python3-pil.imagetk)
 Config file:  rpi_clock.cfg  (same directory)
 """
 
@@ -15,12 +16,12 @@ import os
 import sys
 import logging
 import io
+import socket
 from pathlib import Path
 from datetime import datetime
 
-# PIL for OWM icon display
 try:
-    from PIL import Image, ImageTk
+    from PIL import Image, ImageTk, ImageDraw
     PIL_AVAILABLE = True
 except ImportError:
     PIL_AVAILABLE = False
@@ -34,9 +35,176 @@ logging.basicConfig(
 log = logging.getLogger("rpi_clock")
 
 
+# ── Themes ────────────────────────────────────────────────────────────────────
+THEMES = {
+    "dark_blue": {
+        "bg":        "#0a0a1a",
+        "time":      "#ffffff",
+        "date":      "#aaddff",
+        "city":      "#88ccff",
+        "ip":        "#557799",
+        "temp":      "#ffdd88",
+        "desc":      "#dddddd",
+        "detail":    "#bbbbbb",
+        "minmax":    "#aaaaaa",
+        "divider":   "#223355",
+        "icon_badge": False,
+    },
+    "black": {
+        "bg":        "#000000",
+        "time":      "#ffffff",
+        "date":      "#cccccc",
+        "city":      "#aaaaaa",
+        "ip":        "#666666",
+        "temp":      "#ffdd88",
+        "desc":      "#dddddd",
+        "detail":    "#bbbbbb",
+        "minmax":    "#999999",
+        "divider":   "#333333",
+        "icon_badge": False,
+    },
+    "dark_green": {
+        "bg":        "#001a00",
+        "time":      "#ffffff",
+        "date":      "#aaffaa",
+        "city":      "#88dd88",
+        "ip":        "#446644",
+        "temp":      "#ffdd88",
+        "desc":      "#ccffcc",
+        "detail":    "#aaccaa",
+        "minmax":    "#88aa88",
+        "divider":   "#115511",
+        "icon_badge": False,
+    },
+    "red": {
+        "bg":        "#1a0000",
+        "time":      "#ffffff",
+        "date":      "#ffaaaa",
+        "city":      "#ff8888",
+        "ip":        "#884444",
+        "temp":      "#ffdd88",
+        "desc":      "#ffcccc",
+        "detail":    "#ffaaaa",
+        "minmax":    "#dd8888",
+        "divider":   "#551111",
+        "icon_badge": False,
+    },
+    "orange": {
+        "bg":        "#1a0800",
+        "time":      "#ffffff",
+        "date":      "#ffddaa",
+        "city":      "#ffbb77",
+        "ip":        "#886633",
+        "temp":      "#ffee88",
+        "desc":      "#ffddcc",
+        "detail":    "#ffccaa",
+        "minmax":    "#ddaa77",
+        "divider":   "#553311",
+        "icon_badge": False,
+    },
+    "yellow": {
+        "bg":        "#1a1a00",
+        "time":      "#ffffff",
+        "date":      "#ffffaa",
+        "city":      "#dddd77",
+        "ip":        "#777733",
+        "temp":      "#ffffff",
+        "desc":      "#ffffcc",
+        "detail":    "#ddddaa",
+        "minmax":    "#bbbb88",
+        "divider":   "#444400",
+        "icon_badge": False,
+    },
+    "white": {
+        "bg":        "#f0f0f0",
+        "time":      "#111111",
+        "date":      "#222266",
+        "city":      "#333399",
+        "ip":        "#888888",
+        "temp":      "#993300",
+        "desc":      "#222222",
+        "detail":    "#444444",
+        "minmax":    "#555555",
+        "divider":   "#aaaacc",
+        "icon_badge": True,    # dark badge behind icon for visibility
+    },
+}
+
+THEME_NAMES = {
+    "1": "dark_blue",
+    "2": "black",
+    "3": "dark_green",
+    "4": "red",
+    "5": "orange",
+    "6": "yellow",
+    "7": "white",
+}
+
+# Australian state abbreviations
+AU_STATES = {
+    "new south wales":       "NSW",
+    "victoria":              "VIC",
+    "queensland":            "QLD",
+    "south australia":       "SA",
+    "western australia":     "WA",
+    "tasmania":              "TAS",
+    "northern territory":    "NT",
+    "australian capital territory": "ACT",
+}
+
+# US state abbreviations (common ones)
+US_STATES = {
+    "alabama": "AL", "alaska": "AK", "arizona": "AZ", "arkansas": "AR",
+    "california": "CA", "colorado": "CO", "connecticut": "CT",
+    "delaware": "DE", "florida": "FL", "georgia": "GA", "hawaii": "HI",
+    "idaho": "ID", "illinois": "IL", "indiana": "IN", "iowa": "IA",
+    "kansas": "KS", "kentucky": "KY", "louisiana": "LA", "maine": "ME",
+    "maryland": "MD", "massachusetts": "MA", "michigan": "MI",
+    "minnesota": "MN", "mississippi": "MS", "missouri": "MO",
+    "montana": "MT", "nebraska": "NE", "nevada": "NV",
+    "new hampshire": "NH", "new jersey": "NJ", "new mexico": "NM",
+    "new york": "NY", "north carolina": "NC", "north dakota": "ND",
+    "ohio": "OH", "oklahoma": "OK", "oregon": "OR", "pennsylvania": "PA",
+    "rhode island": "RI", "south carolina": "SC", "south dakota": "SD",
+    "tennessee": "TN", "texas": "TX", "utah": "UT", "vermont": "VT",
+    "virginia": "VA", "washington": "WA", "west virginia": "WV",
+    "wisconsin": "WI", "wyoming": "WY",
+}
+
+# UK regions
+UK_REGIONS = {
+    "england": "England", "scotland": "Scotland",
+    "wales": "Wales", "northern ireland": "NI",
+}
+
+
+def abbreviate_state(state: str, country: str) -> str:
+    """Return abbreviated state/region or original if not found."""
+    s = state.lower()
+    if country == "AU":
+        return AU_STATES.get(s, state)
+    if country == "US":
+        return US_STATES.get(s, state)
+    if country == "GB":
+        return UK_REGIONS.get(s, state)
+    return state
+
+
+def get_local_ip() -> str:
+    """Get the primary local network IP address."""
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.connect(("8.8.8.8", 80))
+        ip = s.getsockname()[0]
+        s.close()
+        return ip
+    except Exception:
+        return "?.?.?.?"
+
+
 # ── Config ────────────────────────────────────────────────────────────────────
 def load_config(cfg_path: str) -> configparser.RawConfigParser:
-    cfg = configparser.RawConfigParser()   # RawConfigParser: % is not special
+    cfg = configparser.RawConfigParser()
     if not os.path.isfile(cfg_path):
         log.error("Config file not found: %s", cfg_path)
         sys.exit(1)
@@ -46,6 +214,7 @@ def load_config(cfg_path: str) -> configparser.RawConfigParser:
 
 # ── OpenWeatherMap ────────────────────────────────────────────────────────────
 OWM_URL      = "https://api.openweathermap.org/data/2.5/weather"
+OWM_GEO_URL  = "https://api.openweathermap.org/geo/1.0/direct"
 OWM_ICON_URL = "https://openweathermap.org/img/wn/{}@2x.png"
 
 WIND_DIRS = [
@@ -64,12 +233,15 @@ def deg_to_compass(deg: float) -> str:
 class WeatherFetcher:
     def __init__(self, api_key: str, location: str, units: str):
         self.api_key  = api_key
-        self.location = location        # e.g. "q=Adelaide,au" or "zip=75248,us"
-        self.units    = units           # "metric" or "imperial"
-        self._cache:      dict  = {}
-        self._icon_cache: dict  = {}    # icon_code -> PIL ImageTk
-        self._last_fetch: float = 0.0
-        self.fetch_interval: int = 600  # seconds between API calls
+        self.location = location
+        self.units    = units
+        self._cache:       dict  = {}
+        self._icon_cache:  dict  = {}
+        self._geo_cache:   str   = ""
+        self._last_fetch:  float = 0.0
+        self._last_geo:    float = 0.0
+        self.fetch_interval: int = 600
+        self.geo_interval:   int = 3600   # re-check geo once per hour
 
     def get(self) -> dict:
         now = time.time()
@@ -96,11 +268,54 @@ class WeatherFetcher:
 
         return self._cache
 
-    def get_icon(self, icon_code: str, size: tuple = (80, 80)):
-        """Download and cache OWM icon as a PIL ImageTk. Returns None on failure."""
+    def get_location_string(self) -> str:
+        """Return 'City, State, Country' using OWM geocoding API."""
+        now = time.time()
+        if self._geo_cache and (now - self._last_geo < self.geo_interval):
+            return self._geo_cache
+
+        # Build query string from location config
+        query = ""
+        for part in self.location.split("&"):
+            if "=" in part:
+                k, v = part.split("=", 1)
+                if k.strip() == "q":
+                    query = v.strip()
+                    break
+
+        if not query:
+            self._geo_cache = self._cache.get("city", "")
+            return self._geo_cache
+
+        try:
+            params = {"q": query, "limit": 1, "appid": self.api_key}
+            resp = requests.get(OWM_GEO_URL, params=params, timeout=10)
+            resp.raise_for_status()
+            data = resp.json()
+            if data:
+                geo      = data[0]
+                city     = geo.get("name", "")
+                state    = geo.get("state", "")
+                country  = geo.get("country", "")
+                state_ab = abbreviate_state(state, country) if state else ""
+                parts    = [p for p in [city, state_ab, country] if p]
+                self._geo_cache  = ", ".join(parts)
+                self._last_geo   = now
+                log.info("Location: %s", self._geo_cache)
+            else:
+                self._geo_cache = self._cache.get("city", "")
+        except Exception as exc:
+            log.warning("Geo lookup failed: %s", exc)
+            self._geo_cache = self._cache.get("city", "")
+
+        return self._geo_cache
+
+    def get_icon(self, icon_code: str, size: tuple, badge: bool,
+                 bg_hex: str) -> object:
+        """Download and cache OWM icon. Adds dark badge if badge=True."""
         if not PIL_AVAILABLE:
             return None
-        key = f"{icon_code}_{size[0]}"
+        key = f"{icon_code}_{size[0]}_{badge}"
         if key in self._icon_cache:
             return self._icon_cache[key]
         try:
@@ -109,27 +324,45 @@ class WeatherFetcher:
             resp.raise_for_status()
             img  = Image.open(io.BytesIO(resp.content)).convert("RGBA")
             img  = img.resize(size, Image.LANCZOS)
-            # Composite onto the background colour to remove transparency
-            bg   = Image.new("RGBA", size, (10, 10, 26, 255))   # matches BG #0a0a1a
-            bg.paste(img, mask=img.split()[3])
-            tk_img = ImageTk.PhotoImage(bg.convert("RGB"))
+
+            # Parse background colour
+            bg_r = int(bg_hex[1:3], 16)
+            bg_g = int(bg_hex[3:5], 16)
+            bg_b = int(bg_hex[5:7], 16)
+
+            if badge:
+                # Draw dark rounded rectangle behind icon
+                pad    = 6
+                canvas = Image.new("RGBA",
+                    (size[0] + pad*2, size[1] + pad*2), (bg_r, bg_g, bg_b, 255))
+                draw   = ImageDraw.Draw(canvas)
+                draw.rounded_rectangle(
+                    [2, 2, canvas.width-2, canvas.height-2],
+                    radius=12, fill=(30, 30, 30, 220))
+                canvas.paste(img, (pad, pad), mask=img.split()[3])
+                final = canvas
+            else:
+                final = Image.new("RGBA", size, (bg_r, bg_g, bg_b, 255))
+                final.paste(img, mask=img.split()[3])
+
+            tk_img = ImageTk.PhotoImage(final.convert("RGB"))
             self._icon_cache[key] = tk_img
-            log.info("Icon downloaded: %s", icon_code)
+            log.info("Icon cached: %s", icon_code)
             return tk_img
         except Exception as exc:
             log.warning("Icon fetch failed (%s): %s", icon_code, exc)
             return None
 
     def _parse(self, d: dict) -> dict:
-        weather   = d.get("weather", [{}])[0]
-        main      = d.get("main",    {})
-        wind      = d.get("wind",    {})
-        icon_code = weather.get("icon", "01d")
-        unit_sym  = "°C" if self.units == "metric" else "°F"
+        weather    = d.get("weather", [{}])[0]
+        main       = d.get("main",    {})
+        wind       = d.get("wind",    {})
+        icon_code  = weather.get("icon", "01d")
+        unit_sym   = "°C" if self.units == "metric" else "°F"
         speed_unit = "km/h" if self.units == "metric" else "mph"
         wind_speed = wind.get("speed", 0)
         if self.units == "metric":
-            wind_speed = wind_speed * 3.6   # m/s → km/h
+            wind_speed = wind_speed * 3.6
         return {
             "description": weather.get("description", "").capitalize(),
             "icon_code":   icon_code,
@@ -160,21 +393,14 @@ class WeatherFetcher:
 
 # ── GUI ───────────────────────────────────────────────────────────────────────
 class ClockApp:
-    # Colour palette
-    BG        = "#0a0a1a"
-    FG_TIME   = "#ffffff"
-    FG_DATE   = "#aaddff"
-    FG_CITY   = "#88ccff"
-    FG_TEMP   = "#ffdd88"
-    FG_DESC   = "#dddddd"
-    FG_DETAIL = "#bbbbbb"
-    FG_MINMAX = "#aaaaaa"
-    DIVIDER   = "#223355"
-
     def __init__(self, root: tk.Tk, cfg: configparser.RawConfigParser):
         self.root = root
         display   = cfg["display"]
         owm       = cfg["openweathermap"]
+
+        # Theme
+        theme_name = cfg.get("colours", "theme", fallback="dark_blue")
+        self.theme = THEMES.get(theme_name, THEMES["dark_blue"])
 
         self.width    = display.getint("width",  fallback=480)
         self.height   = display.getint("height", fallback=320)
@@ -182,113 +408,113 @@ class ClockApp:
         self.date_fmt = display.get("date_format", fallback="%A  %d %B %Y")
 
         self.weather = WeatherFetcher(
-            api_key  = owm.get("api_key",   ""),
-            location = owm.get("location",  "q=London,uk"),
-            units    = owm.get("units",     "metric"),
+            api_key  = owm.get("api_key",  ""),
+            location = owm.get("location", "q=London,uk"),
+            units    = owm.get("units",    "metric"),
         )
 
-        self._current_icon_code = None   # track icon changes
-        self._icon_image        = None   # hold reference to prevent GC
+        self._current_icon_code = None
+        self._icon_image        = None
+        self._local_ip          = get_local_ip()
 
         self._setup_window()
         self._build_ui()
         self._tick()
 
-    # ── window setup — correct method for framebuffer fullscreen ──
     def _setup_window(self):
         self.root.title("RPi Clock")
-        self.root.configure(bg=self.BG)
-
-        # overrideredirect removes the window border/titlebar entirely,
-        # then we force exact geometry — this is the reliable method on
-        # framebuffer displays where -fullscreen can misbehave.
+        self.root.configure(bg=self.theme["bg"])
         self.root.overrideredirect(True)
         self.root.geometry(f"{self.width}x{self.height}+0+0")
-
         self.root.resizable(False, False)
         self.root.config(cursor="none")
-
-        # Ctrl+C in terminal still works; touch-hold could be wired here later
         self.root.bind("<Escape>", lambda _e: self.root.destroy())
 
-    # ── UI layout ──
     def _build_ui(self):
         W = self.width
         H = self.height
+        T = self.theme
 
-        # ── left panel: clock + date + city ──────────────────────────────────
-        left = tk.Frame(self.root, bg=self.BG, width=int(W * 0.54), height=H)
+        # ── left panel ───────────────────────────────────────────────────────
+        left_w = int(W * 0.62)
+        left   = tk.Frame(self.root, bg=T["bg"], width=left_w, height=H)
         left.place(x=0, y=0)
         left.pack_propagate(False)
 
         self.lbl_time = tk.Label(
-            left, text="00:00:00", bg=self.BG, fg=self.FG_TIME,
-            font=("FreeMono", 48, "bold"))
-        self.lbl_time.place(relx=0.5, rely=0.28, anchor="center")
+            left, text="00:00:00", bg=T["bg"], fg=T["time"],
+            font=("FreeMono", 44, "bold"))
+        self.lbl_time.place(relx=0.5, rely=0.25, anchor="center")
 
         self.lbl_date = tk.Label(
-            left, text="", bg=self.BG, fg=self.FG_DATE,
+            left, text="", bg=T["bg"], fg=T["date"],
             font=("DejaVu Sans", 13))
-        self.lbl_date.place(relx=0.5, rely=0.54, anchor="center")
+        self.lbl_date.place(relx=0.5, rely=0.52, anchor="center")
 
         self.lbl_city = tk.Label(
-            left, text="", bg=self.BG, fg=self.FG_CITY,
-            font=("DejaVu Sans", 12))
-        self.lbl_city.place(relx=0.5, rely=0.72, anchor="center")
+            left, text="", bg=T["bg"], fg=T["city"],
+            font=("DejaVu Sans", 11))
+        self.lbl_city.place(relx=0.5, rely=0.70, anchor="center")
 
-        # ── vertical divider ─────────────────────────────────────────────────
-        tk.Frame(self.root, bg=self.DIVIDER, width=2, height=int(H * 0.88)).place(
-            x=int(W * 0.545), y=int(H * 0.06))
+        self.lbl_ip = tk.Label(
+            left, text=self._local_ip, bg=T["bg"], fg=T["ip"],
+            font=("DejaVu Sans", 10))
+        self.lbl_ip.place(relx=0.5, rely=0.84, anchor="center")
 
-        # ── right panel: weather ──────────────────────────────────────────────
-        rx = int(W * 0.56)
-        rw = W - rx
-        right = tk.Frame(self.root, bg=self.BG, width=rw, height=H)
+        # ── divider ──────────────────────────────────────────────────────────
+        tk.Frame(self.root, bg=T["divider"], width=2,
+                 height=int(H * 0.88)).place(
+            x=int(W * 0.625), y=int(H * 0.06))
+
+        # ── right panel ──────────────────────────────────────────────────────
+        rx  = int(W * 0.64)
+        rw  = W - rx
+        right = tk.Frame(self.root, bg=T["bg"], width=rw, height=H)
         right.place(x=rx, y=0)
         right.pack_propagate(False)
 
-        # Icon — either OWM image or fallback text
-        self.lbl_icon = tk.Label(
-            right, bg=self.BG, fg=self.FG_TIME,
-            font=("DejaVu Sans", 11))
+        self.lbl_icon = tk.Label(right, bg=T["bg"])
         self.lbl_icon.place(relx=0.5, rely=0.16, anchor="center")
 
         self.lbl_temp = tk.Label(
-            right, text="--", bg=self.BG, fg=self.FG_TEMP,
-            font=("DejaVu Sans", 26, "bold"))
+            right, text="--", bg=T["bg"], fg=T["temp"],
+            font=("DejaVu Sans", 24, "bold"))
         self.lbl_temp.place(relx=0.5, rely=0.40, anchor="center")
 
         self.lbl_desc = tk.Label(
-            right, text="", bg=self.BG, fg=self.FG_DESC,
-            font=("DejaVu Sans", 13), wraplength=int(rw * 0.92), justify="center")
-        self.lbl_desc.place(relx=0.5, rely=0.57, anchor="center")
+            right, text="", bg=T["bg"], fg=T["desc"],
+            font=("DejaVu Sans", 12), wraplength=int(rw * 0.92),
+            justify="center")
+        self.lbl_desc.place(relx=0.5, rely=0.55, anchor="center")
 
         self.lbl_detail = tk.Label(
-            right, text="", bg=self.BG, fg=self.FG_DETAIL,
-            font=("DejaVu Sans", 11), justify="center")
-        self.lbl_detail.place(relx=0.5, rely=0.74, anchor="center")
+            right, text="", bg=T["bg"], fg=T["detail"],
+            font=("DejaVu Sans", 10), justify="left")
+        self.lbl_detail.place(relx=0.5, rely=0.73, anchor="center")
 
         self.lbl_minmax = tk.Label(
-            right, text="", bg=self.BG, fg=self.FG_MINMAX,
-            font=("DejaVu Sans", 11), justify="center")
-        self.lbl_minmax.place(relx=0.5, rely=0.90, anchor="center")
+            right, text="", bg=T["bg"], fg=T["minmax"],
+            font=("DejaVu Sans", 10), justify="center")
+        self.lbl_minmax.place(relx=0.5, rely=0.91, anchor="center")
 
-    # ── update icon ──────────────────────────────────────────────────────────
     def _update_icon(self, icon_code: str):
         if icon_code == self._current_icon_code:
-            return   # no change needed
+            return
         self._current_icon_code = icon_code
-
-        img = self.weather.get_icon(icon_code, size=(80, 80))
+        img = self.weather.get_icon(
+            icon_code,
+            size=(80, 80),
+            badge=self.theme["icon_badge"],
+            bg_hex=self.theme["bg"],
+        )
         if img:
-            self._icon_image = img           # keep reference — prevents GC
+            self._icon_image = img
             self.lbl_icon.config(image=img, text="")
         else:
-            # Fallback: show icon code as text if PIL unavailable or fetch failed
             self.lbl_icon.config(image="", text=f"[{icon_code}]",
-                                 font=("DejaVu Sans", 12))
+                                 font=("DejaVu Sans", 11),
+                                 fg=self.theme["desc"])
 
-    # ── tick every second ─────────────────────────────────────────────────────
     def _tick(self):
         now = datetime.now()
         self.lbl_time.config(text=now.strftime(self.time_fmt))
@@ -296,14 +522,18 @@ class ClockApp:
 
         w = self.weather.get()
         self._update_icon(w["icon_code"])
-        self.lbl_city.config(text=w["city"])
         self.lbl_temp.config(text=w["temp"])
         self.lbl_desc.config(text=w["description"])
         self.lbl_detail.config(
-            text=f"Feels {w['feels_like']}   Hum {w['humidity']}\n"
-                 f"Wind {w['wind']}")
+            text=f"Feels Like: {w['feels_like']}\n"
+                 f"Humidity:   {w['humidity']}\n"
+                 f"Wind:       {w['wind']}")
         self.lbl_minmax.config(
             text=f"↓ {w['temp_min']}   ↑ {w['temp_max']}")
+
+        # Location string (cached — only hits geo API once per hour)
+        loc = self.weather.get_location_string()
+        self.lbl_city.config(text=loc)
 
         self.root.after(1000, self._tick)
 
