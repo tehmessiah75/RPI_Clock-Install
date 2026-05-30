@@ -65,7 +65,7 @@ THEMES = {
     },
     "dark_green": {
         "bg":        "#001a00",
-        "time":      "#f9f9f9",
+        "time":      "#ffffff",
         "date":      "#aaffaa",
         "city":      "#88dd88",
         "ip":        "#446644",
@@ -213,9 +213,10 @@ def load_config(cfg_path: str) -> configparser.RawConfigParser:
 
 
 # ── OpenWeatherMap ────────────────────────────────────────────────────────────
-OWM_URL      = "https://api.openweathermap.org/data/2.5/weather"
-OWM_GEO_URL  = "https://api.openweathermap.org/geo/1.0/direct"
-OWM_ICON_URL = "https://openweathermap.org/img/wn/{}@2x.png"
+OWM_URL         = "https://api.openweathermap.org/data/2.5/weather"
+OWM_GEO_URL     = "https://api.openweathermap.org/geo/1.0/direct"
+OWM_REVERSE_URL = "https://api.openweathermap.org/geo/1.0/reverse"
+OWM_ICON_URL    = "https://openweathermap.org/img/wn/{}@2x.png"
 
 WIND_DIRS = [
     "N", "NNE", "NE", "ENE",
@@ -241,7 +242,7 @@ class WeatherFetcher:
         self._last_fetch:  float = 0.0
         self._last_geo:    float = 0.0
         self.fetch_interval: int = 600
-        self.geo_interval:   int = 3600   # re-check geo once per hour, calculated in seconds(1hr = 3600s).
+        self.geo_interval:   int = 3600   # re-check geo once per hour
 
     def get(self) -> dict:
         now = time.time()
@@ -269,27 +270,23 @@ class WeatherFetcher:
         return self._cache
 
     def get_location_string(self) -> str:
-        """Return 'City, State, Country' using OWM geocoding API."""
+        """Return 'City, State, Country' using OWM reverse geocoding.
+        Uses lat/lon from the weather response — works for all location
+        formats (q=, zip=, id=)."""
         now = time.time()
         if self._geo_cache and (now - self._last_geo < self.geo_interval):
             return self._geo_cache
 
-        # Build query string from location config
-        query = ""
-        for part in self.location.split("&"):
-            if "=" in part:
-                k, v = part.split("=", 1)
-                if k.strip() == "q":
-                    query = v.strip()
-                    break
-
-        if not query:
+        # Need coordinates from weather cache — wait until we have them
+        lat = self._cache.get("lat")
+        lon = self._cache.get("lon")
+        if lat is None or lon is None:
             self._geo_cache = self._cache.get("city", "")
             return self._geo_cache
 
         try:
-            params = {"q": query, "limit": 1, "appid": self.api_key}
-            resp = requests.get(OWM_GEO_URL, params=params, timeout=10)
+            params = {"lat": lat, "lon": lon, "limit": 1, "appid": self.api_key}
+            resp = requests.get(OWM_REVERSE_URL, params=params, timeout=10)
             resp.raise_for_status()
             data = resp.json()
             if data:
@@ -299,8 +296,8 @@ class WeatherFetcher:
                 country  = geo.get("country", "")
                 state_ab = abbreviate_state(state, country) if state else ""
                 parts    = [p for p in [city, state_ab, country] if p]
-                self._geo_cache  = ", ".join(parts)
-                self._last_geo   = now
+                self._geo_cache = ", ".join(parts)
+                self._last_geo  = now
                 log.info("Location: %s", self._geo_cache)
             else:
                 self._geo_cache = self._cache.get("city", "")
@@ -374,6 +371,8 @@ class WeatherFetcher:
             "wind":        f"{wind_speed:.0f} {speed_unit} "
                            f"{deg_to_compass(wind.get('deg', 0))}",
             "city":        d.get("name", ""),
+            "lat":         d.get("coord", {}).get("lat"),
+            "lon":         d.get("coord", {}).get("lon"),
         }
 
     @staticmethod
