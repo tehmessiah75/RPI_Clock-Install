@@ -81,14 +81,22 @@ ssh pi@<IP address>
 
 All remaining setup is done by a single script on the Pi.
 
-### 2.1 Clone this repo
+### 2.1 Install git
+
+Git is not pre-installed on Raspberry Pi OS Lite. Install it first:
 
 ```bash
-git clone https://github.com/YOUR_USERNAME/rpi_clock_waveshare.git
-cd rpi_clock_waveshare
+sudo apt-get install -y git
 ```
 
-### 2.2 Run the installer
+### 2.2 Clone this repo
+
+```bash
+git clone https://github.com/tehmessiah75/RPI_Clock-Install.git
+cd RPI_Clock-Install
+```
+
+### 2.3 Run the installer
 
 ```bash
 sudo bash install.sh
