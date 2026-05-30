@@ -64,11 +64,87 @@ read -rp "  OpenWeatherMap API key: " OWM_APIKEY
 # ── Location ──────────────────────────────────────────────────────────────────
 echo ""
 echo "  Location format — choose ONE of:"
-echo "    City name:   q=Adelaide,au   (country code is 2-letter ISO)"
-echo "    Post/ZIP:    zip=5000,au     (zip=75248,us for US)"
+echo "    City name:   q=Moana,au      (country code is 2-letter ISO)"
+echo "    Post/ZIP:    zip=5169,au     (zip=75248,us for US)"
+echo "  Note: q=suburb,country gives the most accurate location display."
 echo ""
 read -rp "  Location (e.g. q=Moana,au): " OWM_LOCATION
 OWM_LOCATION="${OWM_LOCATION:-q=Adelaide,au}"
+
+# ── Resolve display location string via OWM geocoding ─────────────────────────
+info "Looking up location name..."
+DISPLAY_LOCATION=""
+
+# Extract key and value from location string
+LOC_KEY=$(echo "$OWM_LOCATION" | cut -d'=' -f1 | tr -d ' ')
+LOC_VAL=$(echo "$OWM_LOCATION" | cut -d'=' -f2-)
+
+if [ "$LOC_KEY" = "q" ]; then
+  # Forward geocoding
+  GEO_RESULT=$(curl -sf \
+    "https://api.openweathermap.org/geo/1.0/direct?q=${LOC_VAL}&limit=1&appid=${OWM_APIKEY}" \
+    2>/dev/null || echo "[]")
+else
+  # Get coordinates from weather API first, then reverse geocode
+  WEATHER_RESULT=$(curl -sf \
+    "https://api.openweathermap.org/data/2.5/weather?${OWM_LOCATION}&appid=${OWM_APIKEY}&units=metric" \
+    2>/dev/null || echo "{}")
+  LAT=$(echo "$WEATHER_RESULT" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('coord',{}).get('lat',''))" 2>/dev/null)
+  LON=$(echo "$WEATHER_RESULT" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('coord',{}).get('lon',''))" 2>/dev/null)
+  if [ -n "$LAT" ] && [ -n "$LON" ]; then
+    GEO_RESULT=$(curl -sf \
+      "https://api.openweathermap.org/geo/1.0/reverse?lat=${LAT}&lon=${LON}&limit=1&appid=${OWM_APIKEY}" \
+      2>/dev/null || echo "[]")
+  else
+    GEO_RESULT="[]"
+  fi
+fi
+
+# Parse the geo result
+DISPLAY_LOCATION=$(echo "$GEO_RESULT" | python3 -c "
+import sys, json
+try:
+    data = json.load(sys.stdin)
+    if data:
+        g = data[0]
+        city    = g.get('name', '')
+        state   = g.get('state', '')
+        country = g.get('country', '')
+        AU = {'new south wales':'NSW','victoria':'VIC','queensland':'QLD',
+              'south australia':'SA','western australia':'WA','tasmania':'TAS',
+              'northern territory':'NT','australian capital territory':'ACT'}
+        US = {'alabama':'AL','alaska':'AK','arizona':'AZ','arkansas':'AR',
+              'california':'CA','colorado':'CO','connecticut':'CT','delaware':'DE',
+              'florida':'FL','georgia':'GA','hawaii':'HI','idaho':'ID',
+              'illinois':'IL','indiana':'IN','iowa':'IA','kansas':'KS',
+              'kentucky':'KY','louisiana':'LA','maine':'ME','maryland':'MD',
+              'massachusetts':'MA','michigan':'MI','minnesota':'MN',
+              'mississippi':'MS','missouri':'MO','montana':'MT','nebraska':'NE',
+              'nevada':'NV','new hampshire':'NH','new jersey':'NJ',
+              'new mexico':'NM','new york':'NY','north carolina':'NC',
+              'north dakota':'ND','ohio':'OH','oklahoma':'OK','oregon':'OR',
+              'pennsylvania':'PA','rhode island':'RI','south carolina':'SC',
+              'south dakota':'SD','tennessee':'TN','texas':'TX','utah':'UT',
+              'vermont':'VT','virginia':'VA','washington':'WA',
+              'west virginia':'WV','wisconsin':'WI','wyoming':'WY'}
+        if country == 'AU':
+            state = AU.get(state.lower(), state)
+        elif country == 'US':
+            state = US.get(state.lower(), state)
+        parts = [p for p in [city, state, country] if p]
+        print(', '.join(parts))
+    else:
+        print('')
+except:
+    print('')
+" 2>/dev/null)
+
+if [ -n "$DISPLAY_LOCATION" ]; then
+  ok "Location resolved: $DISPLAY_LOCATION"
+else
+  warn "Could not resolve location name — will show city from weather API."
+  DISPLAY_LOCATION=""
+fi
 
 # ── Units ─────────────────────────────────────────────────────────────────────
 echo ""
@@ -130,9 +206,10 @@ cat > "$CFG_FILE" <<EOCFG
 # Re-run configure.sh to change these settings.
 
 [openweathermap]
-api_key  = ${OWM_APIKEY}
-location = ${OWM_LOCATION}
-units    = ${OWM_UNITS}
+api_key          = ${OWM_APIKEY}
+location         = ${OWM_LOCATION}
+display_location = ${DISPLAY_LOCATION}
+units            = ${OWM_UNITS}
 
 [display]
 fullscreen  = True

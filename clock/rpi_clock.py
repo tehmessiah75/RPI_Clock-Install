@@ -140,56 +140,6 @@ THEME_NAMES = {
     "7": "white",
 }
 
-# Australian state abbreviations
-AU_STATES = {
-    "new south wales":       "NSW",
-    "victoria":              "VIC",
-    "queensland":            "QLD",
-    "south australia":       "SA",
-    "western australia":     "WA",
-    "tasmania":              "TAS",
-    "northern territory":    "NT",
-    "australian capital territory": "ACT",
-}
-
-# US state abbreviations (common ones)
-US_STATES = {
-    "alabama": "AL", "alaska": "AK", "arizona": "AZ", "arkansas": "AR",
-    "california": "CA", "colorado": "CO", "connecticut": "CT",
-    "delaware": "DE", "florida": "FL", "georgia": "GA", "hawaii": "HI",
-    "idaho": "ID", "illinois": "IL", "indiana": "IN", "iowa": "IA",
-    "kansas": "KS", "kentucky": "KY", "louisiana": "LA", "maine": "ME",
-    "maryland": "MD", "massachusetts": "MA", "michigan": "MI",
-    "minnesota": "MN", "mississippi": "MS", "missouri": "MO",
-    "montana": "MT", "nebraska": "NE", "nevada": "NV",
-    "new hampshire": "NH", "new jersey": "NJ", "new mexico": "NM",
-    "new york": "NY", "north carolina": "NC", "north dakota": "ND",
-    "ohio": "OH", "oklahoma": "OK", "oregon": "OR", "pennsylvania": "PA",
-    "rhode island": "RI", "south carolina": "SC", "south dakota": "SD",
-    "tennessee": "TN", "texas": "TX", "utah": "UT", "vermont": "VT",
-    "virginia": "VA", "washington": "WA", "west virginia": "WV",
-    "wisconsin": "WI", "wyoming": "WY",
-}
-
-# UK regions
-UK_REGIONS = {
-    "england": "England", "scotland": "Scotland",
-    "wales": "Wales", "northern ireland": "NI",
-}
-
-
-def abbreviate_state(state: str, country: str) -> str:
-    """Return abbreviated state/region or original if not found."""
-    s = state.lower()
-    if country == "AU":
-        return AU_STATES.get(s, state)
-    if country == "US":
-        return US_STATES.get(s, state)
-    if country == "GB":
-        return UK_REGIONS.get(s, state)
-    return state
-
-
 def get_local_ip() -> str:
     """Get the primary local network IP address."""
     try:
@@ -214,8 +164,6 @@ def load_config(cfg_path: str) -> configparser.RawConfigParser:
 
 # ── OpenWeatherMap ────────────────────────────────────────────────────────────
 OWM_URL         = "https://api.openweathermap.org/data/2.5/weather"
-OWM_GEO_URL     = "https://api.openweathermap.org/geo/1.0/direct"
-OWM_REVERSE_URL = "https://api.openweathermap.org/geo/1.0/reverse"
 OWM_ICON_URL    = "https://openweathermap.org/img/wn/{}@2x.png"
 
 WIND_DIRS = [
@@ -238,11 +186,8 @@ class WeatherFetcher:
         self.units    = units
         self._cache:       dict  = {}
         self._icon_cache:  dict  = {}
-        self._geo_cache:   str   = ""
         self._last_fetch:  float = 0.0
-        self._last_geo:    float = 0.0
         self.fetch_interval: int = 600
-        self.geo_interval:   int = 3600   # re-check geo once per hour
 
     def get(self) -> dict:
         now = time.time()
@@ -268,44 +213,6 @@ class WeatherFetcher:
                 self._cache = self._placeholder()
 
         return self._cache
-
-    def get_location_string(self) -> str:
-        """Return 'City, State, Country' using OWM reverse geocoding.
-        Uses lat/lon from the weather response — works for all location
-        formats (q=, zip=, id=)."""
-        now = time.time()
-        if self._geo_cache and (now - self._last_geo < self.geo_interval):
-            return self._geo_cache
-
-        # Need coordinates from weather cache — wait until we have them
-        lat = self._cache.get("lat")
-        lon = self._cache.get("lon")
-        if lat is None or lon is None:
-            self._geo_cache = self._cache.get("city", "")
-            return self._geo_cache
-
-        try:
-            params = {"lat": lat, "lon": lon, "limit": 1, "appid": self.api_key}
-            resp = requests.get(OWM_REVERSE_URL, params=params, timeout=10)
-            resp.raise_for_status()
-            data = resp.json()
-            if data:
-                geo      = data[0]
-                city     = geo.get("name", "")
-                state    = geo.get("state", "")
-                country  = geo.get("country", "")
-                state_ab = abbreviate_state(state, country) if state else ""
-                parts    = [p for p in [city, state_ab, country] if p]
-                self._geo_cache = ", ".join(parts)
-                self._last_geo  = now
-                log.info("Location: %s", self._geo_cache)
-            else:
-                self._geo_cache = self._cache.get("city", "")
-        except Exception as exc:
-            log.warning("Geo lookup failed: %s", exc)
-            self._geo_cache = self._cache.get("city", "")
-
-        return self._geo_cache
 
     def get_icon(self, icon_code: str, size: tuple, badge: bool,
                  bg_hex: str) -> object:
@@ -411,6 +318,9 @@ class ClockApp:
             location = owm.get("location", "q=London,uk"),
             units    = owm.get("units",    "metric"),
         )
+
+        # Location string set once at configure time — never changes at runtime
+        self._display_location = owm.get("display_location", "")
 
         self._current_icon_code = None
         self._icon_image        = None
@@ -530,9 +440,7 @@ class ClockApp:
         self.lbl_minmax.config(
             text=f"↓ {w['temp_min']}   ↑ {w['temp_max']}")
 
-        # Location string (cached — only hits geo API once per hour)
-        loc = self.weather.get_location_string()
-        self.lbl_city.config(text=loc)
+        self.lbl_city.config(text=self._display_location)
 
         self.root.after(1000, self._tick)
 
